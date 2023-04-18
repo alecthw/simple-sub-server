@@ -1,0 +1,10 @@
+# IntelliJ IDEA project files and directories
+*.iml
+*.ipr
+*.iws
+.idea
+
+/sub
+
+*.exe
+cfg.json
