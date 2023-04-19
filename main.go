@@ -3,9 +3,7 @@ package main
 import (
 	"flag"
 	"os"
-	"path"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -13,28 +11,26 @@ import (
 
 	ginzap "github.com/gin-contrib/zap"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
 var (
-	cfgName string
-
 	workDir string
-	config  *Config
+	host    string
 )
 
 func init() {
 	dir, _ := filepath.Abs(filepath.Dir(os.Args[0]))
 	flag.StringVar(&workDir, "dir", dir, "The wroking directory. Default executable file directory.")
-	flag.StringVar(&cfgName, "cfg", "cfg.json", "The configuration file name. Default \"cfg.json\"")
+
+	flag.StringVar(&host, "host", ":8080", "Http server bind host. Default \":8080\"")
 	flag.Parse()
 
 	gin.SetMode("release")
 }
 
 func main() {
-	config = LoadConfig(filepath.Join(workDir, cfgName))
-
 	r := gin.New()
 
 	r.Use(ginzap.Ginzap(log.Logger, time.RFC3339, true))
@@ -42,24 +38,58 @@ func main() {
 
 	zap.S().Infow("main")
 
-	r.GET("/:uuid", func(c *gin.Context) {
+	r.GET("/:uuid/:file", func(c *gin.Context) {
 		uuid := c.Param("uuid")
-		subFilePath, ok := config.Files[uuid]
-		if ok {
-			fileContent, err := os.ReadFile(filepath.Join(workDir, "sub", subFilePath))
-			if err != nil {
-				c.String(404, "Not found")
-				return
-			}
+		file := c.Param("file")
 
-			filePrefix := strings.TrimSuffix(path.Base(subFilePath), path.Ext(subFilePath))
-			c.Header("Content-Disposition", "attachment; filename*=UTF-8''"+filePrefix)
-
-			c.Data(200, "text/plain; charset=UTF-8", fileContent)
-		} else {
-			c.String(404, "Not found")
+		if !isValidUUID(uuid) || !isPathSecure(file) {
+			c.String(403, "Forbidden")
+			return
 		}
+
+		userPath := filepath.Join(workDir, "sub", uuid)
+		if !pathExists(userPath) {
+			c.String(404, "Not found")
+			return
+		}
+
+		subFilePath := filepath.Join(userPath, file)
+		if !pathExists(subFilePath) {
+			c.String(404, "Not found")
+			return
+		}
+
+		fileContent, err := os.ReadFile(subFilePath)
+		if err != nil {
+			c.String(404, "Not found")
+			return
+		}
+
+		c.Data(200, "text/plain; charset=UTF-8", fileContent)
 	})
 
-	r.Run(config.Address + ":" + strconv.Itoa(config.Port))
+	r.Run(host)
+}
+
+func isValidUUID(u string) bool {
+	_, err := uuid.Parse(u)
+	return err == nil
+}
+
+func isPathSecure(filePath string) bool {
+	if strings.Contains(filePath, "..") || strings.Contains(filePath, "/") || strings.Contains(filePath, "\\") {
+		return false
+	} else {
+		return true
+	}
+}
+
+func pathExists(filePath string) bool {
+	_, err := os.Stat(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false
+		}
+	}
+	return true
 }

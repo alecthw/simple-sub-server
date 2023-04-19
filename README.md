@@ -1,30 +1,51 @@
 # sub-server
 
-简单订阅服务器。
+基于文件的简单订阅服务器。
 
 主要为了方便在配置文件完全自己编写的情况下，快速导入Surge、QuantumultX、Loon等客户端。
 
+## 编译
+
+```bash
+git clone https://github.com/alecthw/simple-sub-server.git
+cd simple-sub-server
+export GOOS=linux GOARCH=amd64 # 可选，交叉编译
+go build -o sub-server
+
+```
+
 ## 使用
 
-使用`id <--> filePath`的简单对应方式，配置文件放在程序运行目录下的`sub`文件夹下。
+配置文件存放：`{workdir}/sub/{uuid}/{file}`。
 
-### 配置文件
+`uuid`必须是合法的uuid，做了校验。
 
-配置文件放在工作目录下，默认是`cfg.json`，可通过参数指定。
+代码中做了防越级处理，不能添加父子路径，即 `file` 的值中不能包含字符 `/` 、 `\` 和 `..` 。
 
-```json
-{
-  "address": "127.0.0.1",
-  "port": 8080,
-  "files": {
-    "324e61ce-1d09-a93e-23a0-2205f3b86661": "ClashMeta.yaml",
-    "08a5e389-2538-d9b2-e740-d2550b977317": "ClashMetaOnlyCN.yaml"
-  }
-}
-```
+请求url：`http://127.0.0.1:8080/{uuid}/{file}`。
 
 ### 运行
 
 ```bash
-./sub-server --dir=/path/to/workDir --cfg=cfg.json
+./sub-server -dir /path/to/workDir -host 127.0.0.1:8080
 ```
+
+### 工作目录示例
+
+```txt
+{workdir}
+├── sub
+│   ├── 56d00b21-554d-5a90-6daa-52537050fb20
+│   │   ├── Loon.conf
+│   │   ├── QuantumultX.conf
+│   │   ├── Stash.yaml
+│   │   └── Surge.conf
+│   └── 58cfbff0-18c8-1f7d-400a-ba07a305b1e6
+│       ├── ClashMeta.yaml
+│       └── ClashMetaOnlyCN.yaml
+└── sub-server
+```
+
+### systemd 服务
+
+参考文件：[sub-server.service](https://github.com/alecthw/simple-sub-server/blob/master/sub-server.service)
