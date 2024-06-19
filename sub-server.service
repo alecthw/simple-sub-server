@@ -6,7 +6,7 @@ Wants=network.target
 [Service]
 Type=simple
 PIDFile=/var/run/sub-server.pid
-ExecStart=/opt/sub-server/sub-server -dir /opt/sub-server -host 127.0.0.1:28080
+ExecStart=/opt/sub-server/sub-server -dir "/opt/sub-server" -host "127.0.0.1:28080"
 Restart=on-failure
 
 [Install]
