@@ -155,8 +155,9 @@ func getSubscribeUrls(uid string) (string, error) {
 	var urls []string
 	for scanner.Scan() {
 		line := scanner.Text()
-		if strings.TrimSpace(line) != "" {
-			urls = append(urls, scanner.Text())
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+			urls = append(urls, trimmed)
 		}
 	}
 
