@@ -88,6 +88,18 @@ subconverter 服务器默认地址 `http://127.0.0.1:25500`，可以通过启动
 
 当 target 为 surge 或 surfboard 时，会自动补充与原始 url 一致的 MANAGED-CONFIG。
 
+#### 订阅获取逻辑支持
+
+此处不详述，有需要看源码。
+
+```txt
+{workdir}
+├── sub
+│   └── provider
+│       └── airport.yml
+└── sub-server
+```
+
 ### systemd 服务
 
 参考文件：[sub-server.service](https://github.com/alecthw/simple-sub-server/blob/master/sub-server.service)
