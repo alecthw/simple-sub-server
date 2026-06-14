@@ -51,7 +51,7 @@ func SubscribeHandler(c *gin.Context) {
 		return
 	}
 
-	// if file is ini, redirect to subconverter
+	// if file is ini, send it to subconverter
 	fileExt := path.Ext(subFilePath)
 	if fileExt == ".ini" {
 		c.Data(200, "text/plain; charset=UTF-8", getSubconv(uid, mcUrl, fileContent))
@@ -61,7 +61,7 @@ func SubscribeHandler(c *gin.Context) {
 	c.Data(200, "text/plain; charset=UTF-8", fileContent)
 }
 
-// get file content and check if it is a redirect file
+// get file content
 func getFileContent(uid string, file string) ([]byte, string, error) {
 	subFilePath := filepath.Join(subDir, uid, file)
 	fileContent, err := os.ReadFile(subFilePath)
@@ -72,21 +72,6 @@ func getFileContent(uid string, file string) ([]byte, string, error) {
 			return fileContent, subFilePath, nil
 		}
 		return nil, subFilePath, err
-	}
-
-	fileStr := string(fileContent)
-	if strings.HasPrefix(fileStr, "[Redirect]") {
-		cfgs, _ := ini.Load(fileContent)
-		nextFile := cfgs.Section("Redirect").Key("file").String()
-		nextUid := uid
-		if cfgs.Section("Redirect").HasKey("uuid") {
-			nextUid = cfgs.Section("Redirect").Key("uuid").String()
-		}
-		fileContent, subFilePath, err = getFileContent(nextUid, nextFile)
-		if err != nil {
-			return nil, subFilePath, err
-		}
-		return fileContent, subFilePath, nil
 	}
 
 	return fileContent, subFilePath, nil

@@ -48,18 +48,6 @@ go build -o sub-server
 └── sub-server
 ```
 
-### 文件重定向支持
-
-重定向的判断是判断文件内容以 `[Redirect]` 开头，内容是 `ini` 格式。
-
-```ini
-[Redirect]
-file=clash.ini # 必填
-uuid=58cfbff0-18c8-1f7d-400a-ba07a305b1e6 # 选填，不填则沿用原 uuid
-```
-
-PS: 重定向视为可信输入，不再校验外部输入逻辑，此时重定向文件中所填写的 uuid 可为任意字符串。
-
 ### subconverter 调用支持
 
 subconverter 服务器默认地址 `http://127.0.0.1:25500`，可以通过启动参数 `-subcnv` 修改。
