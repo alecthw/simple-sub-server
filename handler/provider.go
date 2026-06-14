@@ -1,8 +1,14 @@
 package handler
 
 import (
+	"bytes"
+	"compress/gzip"
+	"crypto/aes"
+	"crypto/cipher"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +27,13 @@ type ProviderConfig struct {
 	Username          string            `yaml:"username"`
 	Password          string            `yaml:"password"`
 	Headers           map[string]string `yaml:"headers"`
+	Decrypt           *DecryptConfig    `yaml:"decrypt"`
+}
+
+// DecryptConfig enables the xjkp subscription payload decryption.
+type DecryptConfig struct {
+	Key string `yaml:"key"`
+	IV  string `yaml:"iv"`
 }
 
 type loginResponse struct {
@@ -75,10 +88,16 @@ func ProviderHandler(c *gin.Context) {
 			SetHeaders(contentHeaders).
 			Get(contentUrl)
 		if err == nil && contentResp.StatusCode() == 200 && len(contentResp.Body()) > 0 {
+			body, err := decodeSubscriptionBody(contentResp.Body(), config.Decrypt)
+			if err != nil {
+				zap.S().Errorw("decode content failed", "provider", provider, "error", err)
+				c.String(502, "Bad Gateway")
+				return
+			}
 			if subInfo := contentResp.Header().Get("subscription-userinfo"); subInfo != "" {
 				c.Header("subscription-userinfo", subInfo)
 			}
-			c.Data(200, "text/plain; charset=UTF-8", contentResp.Body())
+			c.Data(200, "text/plain; charset=UTF-8", body)
 			return
 		}
 		zap.S().Infow("cached token expired, re-login", "provider", provider)
@@ -144,10 +163,17 @@ func ProviderHandler(c *gin.Context) {
 		return
 	}
 
+	body, err := decodeSubscriptionBody(contentResp.Body(), config.Decrypt)
+	if err != nil {
+		zap.S().Errorw("decode content failed", "provider", provider, "error", err)
+		c.String(502, "Bad Gateway")
+		return
+	}
+
 	if subInfo := contentResp.Header().Get("subscription-userinfo"); subInfo != "" {
 		c.Header("subscription-userinfo", subInfo)
 	}
-	c.Data(200, "text/plain; charset=UTF-8", contentResp.Body())
+	c.Data(200, "text/plain; charset=UTF-8", body)
 }
 
 // buildContentUrl constructs the Step 3 URL based on forceSubscribeUrl mode
@@ -161,6 +187,78 @@ func buildContentUrl(config *ProviderConfig) string {
 		return config.SubscribeUrl
 	}
 	return fmt.Sprintf("%s?token=%s", config.SubscribeUrl, config.Token)
+}
+
+func decodeSubscriptionBody(body []byte, decrypt *DecryptConfig) ([]byte, error) {
+	if decrypt == nil {
+		return body, nil
+	}
+
+	body, err := gunzipIfNeeded(body)
+	if err != nil {
+		return nil, err
+	}
+
+	cipherText, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(body)))
+	if err != nil {
+		return nil, err
+	}
+	if len(cipherText) == 0 || len(cipherText)%aes.BlockSize != 0 {
+		return nil, fmt.Errorf("invalid ciphertext length")
+	}
+
+	key := []byte(decrypt.Key)
+	iv := []byte(decrypt.IV)
+	if len(key) != aes.BlockSize || len(iv) != aes.BlockSize {
+		return nil, fmt.Errorf("invalid aes key or iv length")
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+
+	plainText := make([]byte, len(cipherText))
+	cipher.NewCBCDecrypter(block, iv).CryptBlocks(plainText, cipherText)
+
+	plainText, err = pkcs7Unpad(plainText)
+	if err != nil {
+		return nil, err
+	}
+
+	return base64.StdEncoding.DecodeString(strings.TrimSpace(string(plainText)))
+}
+
+func gunzipIfNeeded(body []byte) ([]byte, error) {
+	if len(body) < 2 || body[0] != 0x1f || body[1] != 0x8b {
+		return body, nil
+	}
+
+	reader, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = reader.Close()
+	}()
+	return io.ReadAll(reader)
+}
+
+func pkcs7Unpad(data []byte) ([]byte, error) {
+	if len(data) == 0 || len(data)%aes.BlockSize != 0 {
+		return nil, fmt.Errorf("invalid pkcs7 data length")
+	}
+
+	padding := int(data[len(data)-1])
+	if padding == 0 || padding > aes.BlockSize || padding > len(data) {
+		return nil, fmt.Errorf("invalid pkcs7 padding")
+	}
+	for i := len(data) - padding; i < len(data); i++ {
+		if int(data[i]) != padding {
+			return nil, fmt.Errorf("invalid pkcs7 padding")
+		}
+	}
+	return data[:len(data)-padding], nil
 }
 
 // loadProviderConfig reads and parses a provider YAML config file
