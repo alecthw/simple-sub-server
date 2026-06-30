@@ -2,165 +2,217 @@ package handler
 
 import (
 	"bufio"
-	"bytes"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
 
+	"github.com/alecthw/sub-server/handler/subconv"
+	"github.com/alecthw/sub-server/handler/subscription"
+	templateinject "github.com/alecthw/sub-server/handler/template"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"gopkg.in/ini.v1"
 )
 
-// SubscribeHandler handles GET /:uuid/:file
+// SubscribeHandler handles GET /:uuid/:file.
 func SubscribeHandler(c *gin.Context) {
-	mcUrl := managedConfigPrefix + c.Request.RequestURI
-
 	uid := c.Param("uuid")
 	file := c.Param("file")
 
-	// check uuid and file name valid
-	if !isValidUUID(uid) || !isPathSecure(file) {
-		c.String(403, "Forbidden")
+	if !isValidUUID(uid) || !isPathSecure(file) || !isURLReadableSubscriptionFile(file) {
+		c.String(http.StatusForbidden, "Forbidden")
 		return
 	}
 
-	// check user path exist
 	userPath := filepath.Join(subDir, uid)
 	if !pathExists(userPath) {
-		c.String(404, "Not found")
+		c.String(http.StatusNotFound, "Not found")
+		return
+	}
+	if !isFileAllowedByWhitelist(userPath, file) {
+		c.String(http.StatusForbidden, "Forbidden")
 		return
 	}
 
-	// check file exist
 	subFilePath := filepath.Join(userPath, file)
 	if !pathExists(subFilePath) {
-		tplFilePath := filepath.Join(subDir, "template", file)
-		urlFilePath := filepath.Join(userPath, "subscribe.txt")
-		if (!pathExists(tplFilePath)) || (!pathExists(urlFilePath)) {
-			c.String(404, "Not found")
+		fallbackFilePath := getFallbackFilePath(file)
+		if !pathExists(fallbackFilePath) {
+			c.String(http.StatusNotFound, "Not found")
 			return
+		}
+
+		if path.Ext(fallbackFilePath) == ".ini" || templateinject.IsSubscribable(file) {
+			if !pathExists(filepath.Join(userPath, "subscribe.txt")) {
+				c.String(http.StatusNotFound, "Not found")
+				return
+			}
 		}
 	}
 
-	// get file content
-	fileContent, subFilePath, err := getFileContent(uid, file)
+	fileContent, filePath, err := getFileContent(uid, file)
 	if err != nil {
-		c.String(404, "Not found")
+		c.String(http.StatusNotFound, "Not found")
 		return
 	}
 
-	// if file is ini, send it to subconverter
-	fileExt := path.Ext(subFilePath)
-	if fileExt == ".ini" {
-		c.Data(200, "text/plain; charset=UTF-8", getSubconv(uid, mcUrl, fileContent))
+	if path.Ext(filePath) == ".ini" {
+		respondINI(c, uid, file, fileContent)
 		return
 	}
 
-	c.Data(200, "text/plain; charset=UTF-8", fileContent)
+	fileContent, err = appendTemplateContent(uid, file, filePath, fileContent)
+	if err != nil {
+		if os.IsNotExist(err) {
+			c.String(http.StatusNotFound, "Not found")
+			return
+		}
+		c.String(http.StatusInternalServerError, "Internal server error")
+		return
+	}
+
+	c.Data(http.StatusOK, "text/plain; charset=UTF-8", fileContent)
 }
 
-// get file content
+func respondINI(c *gin.Context, uid string, file string, fileContent []byte) {
+	entries, err := subscription.LoadEntries(subDir, uid)
+	if err != nil {
+		c.String(http.StatusNotFound, "Not found")
+		return
+	}
+
+	resp, err := subconv.Handle(subconv.Context{
+		UID:              uid,
+		File:             file,
+		ManagedConfigURL: managedConfigPrefix + c.Request.RequestURI,
+		SubconverterURL:  subconvUrl,
+		Client:           client,
+		Entries:          entries,
+		RedirectURLForFile: func(nextFile string) string {
+			return getRedirectURL(uid, nextFile)
+		},
+	}, fileContent)
+	if err != nil {
+		c.String(http.StatusNotFound, "Not found")
+		return
+	}
+
+	if resp.Location != "" {
+		c.Redirect(resp.Status, resp.Location)
+		return
+	}
+	c.Data(resp.Status, resp.ContentType, resp.Body)
+}
+
+func getRedirectURL(uid string, file string) string {
+	if managedConfigPrefix == "" {
+		return file
+	}
+	return strings.TrimRight(managedConfigPrefix, "/") + "/" + uid + "/" + file
+}
+
 func getFileContent(uid string, file string) ([]byte, string, error) {
 	subFilePath := filepath.Join(subDir, uid, file)
 	fileContent, err := os.ReadFile(subFilePath)
-	if err != nil {
-		// try to get file from template
-		if uid != "template" {
-			fileContent, subFilePath, err = getFileContent("template", file)
-			return fileContent, subFilePath, nil
-		}
-		return nil, subFilePath, err
+	if err == nil {
+		return fileContent, subFilePath, nil
 	}
 
-	return fileContent, subFilePath, nil
+	fallbackFilePath := getFallbackFilePath(file)
+	fileContent, err = os.ReadFile(fallbackFilePath)
+	if err != nil {
+		return nil, fallbackFilePath, err
+	}
+
+	return fileContent, fallbackFilePath, nil
 }
 
-// get subscribe urls
-func getSubscribeUrls(uid string) (string, error) {
-	urlFilePath := filepath.Join(subDir, uid, "subscribe.txt")
+func getFallbackFilePath(file string) string {
+	if path.Ext(file) == ".ini" {
+		return filepath.Join(subDir, "subconv", file)
+	}
 
-	fh, err := os.Open(urlFilePath)
+	return filepath.Join(subDir, "template", file)
+}
+
+func appendTemplateContent(uid string, file string, filePath string, fileContent []byte) ([]byte, error) {
+	if !isTemplateFilePath(filePath) {
+		return fileContent, nil
+	}
+	if !templateinject.IsSubscribable(file) {
+		return nil, os.ErrNotExist
+	}
+
+	entries, err := subscription.LoadEntries(subDir, uid)
 	if err != nil {
-		return "", err
+		return nil, err
+	}
+
+	return templateinject.Inject(templateinject.Context{
+		UID:        uid,
+		File:       file,
+		ManagedURL: getManagedConfigURL(uid, file),
+		Entries:    entries,
+	}, fileContent)
+}
+
+func isTemplateFilePath(filePath string) bool {
+	return filepath.Dir(filePath) == filepath.Join(subDir, "template")
+}
+
+func getManagedConfigURL(uid string, file string) string {
+	if managedConfigPrefix == "" {
+		return ""
+	}
+	return managedConfigPrefix + "/" + uid + "/" + file
+}
+
+func isValidUUID(u string) bool {
+	_, err := uuid.Parse(u)
+	return err == nil
+}
+
+func isPathSecure(filePath string) bool {
+	return !strings.Contains(filePath, "..") && !strings.Contains(filePath, "/") && !strings.Contains(filePath, "\\")
+}
+
+func isURLReadableSubscriptionFile(file string) bool {
+	switch strings.ToLower(path.Ext(file)) {
+	case ".yaml", ".yml", ".conf", ".json", ".ini":
+		return true
+	default:
+		return false
+	}
+}
+
+func isFileAllowedByWhitelist(userPath string, file string) bool {
+	whitelistPath := filepath.Join(userPath, "whitelist.txt")
+	fh, err := os.Open(whitelistPath)
+	if err != nil {
+		return os.IsNotExist(err)
 	}
 	defer func() {
 		_ = fh.Close()
 	}()
 
 	scanner := bufio.NewScanner(fh)
-	scanner.Split(bufio.ScanLines)
-
-	var urls []string
 	for scanner.Scan() {
-		line := scanner.Text()
-		trimmed := strings.TrimSpace(line)
-		if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
-			urls = append(urls, trimmed)
+		allowedFile := strings.TrimSpace(scanner.Text())
+		if allowedFile == "" || strings.HasPrefix(allowedFile, "#") {
+			continue
+		}
+		if allowedFile == file {
+			return true
 		}
 	}
-
-	return strings.Join(urls, "|"), nil
+	return false
 }
 
-// get subconverter response
-func getSubconv(uid string, mcUrl string, fileContent []byte) []byte {
-	cfgs, err := ini.Load(fileContent)
-	if err != nil {
-		return []byte("")
-	}
-
-	if !cfgs.Section("Profile").HasKey("url") {
-		urlStr, err := getSubscribeUrls(uid)
-		if err != nil {
-			return []byte("")
-		}
-
-		_, _ = cfgs.Section("Profile").NewKey("url", urlStr)
-	}
-
-	resp, err := client.R().
-		SetQueryParams(cfgs.Section("Profile").KeysHash()).
-		Get(subconvUrl + "/sub")
-
-	if err != nil {
-		return []byte("")
-	}
-
-	target := cfgs.Section("Profile").Key("target").String()
-	if managedConfigPrefix != "" && (target == "surge" || target == "surfboard") {
-		var buffer bytes.Buffer
-		buffer.Write([]byte("#!MANAGED-CONFIG " + mcUrl + " interval=43200 strict=true\n"))
-		buffer.Write(resp.Body())
-		return buffer.Bytes()
-	}
-
-	return resp.Body()
-}
-
-// check if a string is a valid uuid
-func isValidUUID(u string) bool {
-	_, err := uuid.Parse(u)
-	return err == nil
-}
-
-// check if a path is secure
-func isPathSecure(filePath string) bool {
-	if strings.Contains(filePath, "..") || strings.Contains(filePath, "/") || strings.Contains(filePath, "\\") {
-		return false
-	} else {
-		return true
-	}
-}
-
-// check if a path exists
 func pathExists(filePath string) bool {
 	_, err := os.Stat(filePath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return false
-		}
+		return !os.IsNotExist(err)
 	}
 	return true
 }

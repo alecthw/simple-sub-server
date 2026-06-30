@@ -1,14 +1,42 @@
-.claude
+# Local assistant/tooling state
+.claude/
+.codex/
+.agents/
 
-# IntelliJ IDEA project files and directories
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor and IDE files
 *.iml
 *.ipr
 *.iws
-.idea
+.idea/
 
-/sub
-
-*.exe
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+!.env.sample
+.envrc
+*.pem
+*.key
 cfg.json
 
+# Runtime subscription data and local config files
+/sub/
+
+# Go build/test artifacts
+/sub-server
+*.exe
+*.test
+*.out
+coverage.txt
+
+# Temporary/cache directories
+.cache/
+tmp/
+
+# Logs and release artifacts
+*.log
 dist/
