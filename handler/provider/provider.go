@@ -7,11 +7,13 @@ import (
 	"crypto/cipher"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-resty/resty/v2"
@@ -19,16 +21,18 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const cfgUserAgent = "Mozilla/5.0 (dart:io) SuperAccelerator"
+
+var errSubscriptionUnavailable = errors.New("subscription unavailable")
+
 // Config represents a provider YAML configuration file.
 type Config struct {
-	BaseUrl           string            `yaml:"baseUrl"`
-	SubscribeUrl      string            `yaml:"subscribeUrl"`
-	ForceSubscribeUrl bool              `yaml:"forceSubscribeUrl"`
-	Token             string            `yaml:"token"`
-	Username          string            `yaml:"username"`
-	Password          string            `yaml:"password"`
-	Headers           map[string]string `yaml:"headers"`
-	Decrypt           *DecryptConfig    `yaml:"decrypt"`
+	CfgUrls      []string          `yaml:"cfgUrls"`
+	Username     string            `yaml:"username"`
+	Password     string            `yaml:"password"`
+	Headers      map[string]string `yaml:"headers"`
+	Decrypt      *DecryptConfig    `yaml:"decrypt"`
+	SubscribeUrl string            `yaml:"subscribeUrl"`
 }
 
 // DecryptConfig enables the xjkp subscription payload decryption.
@@ -50,6 +54,16 @@ type subscribeResponse struct {
 	} `json:"data"`
 }
 
+type cfgResponse struct {
+	HostSource string   `json:"host_source"`
+	Hosts      []string `json:"hosts"`
+}
+
+type contentResult struct {
+	body                 []byte
+	subscriptionUserinfo string
+}
+
 // Handler handles GET /provider/:provider.
 func Handler(providerDir string, client *resty.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -59,7 +73,6 @@ func Handler(providerDir string, client *resty.Client) gin.HandlerFunc {
 
 func handle(c *gin.Context, providerDir string, client *resty.Client) {
 	providerName := c.Param("provider")
-	ua := c.Query("ua")
 
 	config, err := loadConfig(providerDir, providerName)
 	if err != nil {
@@ -77,112 +90,282 @@ func handle(c *gin.Context, providerDir string, client *resty.Client) {
 	for k, v := range config.Headers {
 		contentHeaders[k] = v
 	}
-	if ua != "" {
-		if existing, ok := contentHeaders["User-Agent"]; ok {
-			contentHeaders["User-Agent"] = ua + " " + existing
-		} else {
-			contentHeaders["User-Agent"] = ua
-		}
-	}
 
-	if config.SubscribeUrl != "" && config.Token != "" {
-		contentUrl := buildContentURL(config)
-		contentResp, err := client.R().
-			SetHeaders(contentHeaders).
-			Get(contentUrl)
-		if err == nil && contentResp.StatusCode() == 200 && len(contentResp.Body()) > 0 {
-			body, err := decodeSubscriptionBody(contentResp.Body(), config.Decrypt)
-			if err != nil {
-				zap.S().Errorw("decode content failed", "provider", providerName, "error", err)
-				c.String(502, "Bad Gateway")
-				return
-			}
-			if subInfo := contentResp.Header().Get("subscription-userinfo"); subInfo != "" {
-				c.Header("subscription-userinfo", subInfo)
-			}
-			c.Data(200, "text/plain; charset=UTF-8", body)
+	if config.SubscribeUrl != "" {
+		result, err := fetchSubscriptionContent(client, config.SubscribeUrl, contentHeaders, config.Decrypt)
+		if err == nil {
+			writeSubscription(c, result)
 			return
 		}
-		zap.S().Infow("cached token expired, re-login", "provider", providerName)
+		zap.S().Infow("cached subscribe url unavailable, refreshing", "provider", providerName, "error", err)
 	}
 
-	loginResp, err := client.R().
-		SetHeaders(authHeaders).
+	baseURLs, err := fetchBaseURLs(client, config.CfgUrls)
+	if err != nil {
+		zap.S().Errorw("failed to fetch provider base urls", "provider", providerName, "error", err)
+		c.String(404, "Not found")
+		return
+	}
+
+	result, subscribeURL, err := refreshSubscription(client, config, baseURLs, authHeaders, contentHeaders)
+	if err != nil {
+		zap.S().Errorw("failed to refresh subscription", "provider", providerName, "error", err)
+		c.String(403, "Forbidden")
+		return
+	}
+
+	config.SubscribeUrl = subscribeURL
+	if err := saveConfig(providerDir, providerName, config); err != nil {
+		zap.S().Errorw("failed to save provider config", "provider", providerName, "error", err)
+	}
+
+	writeSubscription(c, result)
+}
+
+func fetchBaseURLs(client *resty.Client, cfgURLs []string) ([]string, error) {
+	if len(cfgURLs) == 0 {
+		return nil, fmt.Errorf("cfgUrls is empty")
+	}
+
+	type cfgResult struct {
+		index int
+		hosts []string
+		err   error
+	}
+
+	results := make([]cfgResult, len(cfgURLs))
+	ch := make(chan cfgResult, len(cfgURLs))
+	var wg sync.WaitGroup
+	for i, cfgURL := range cfgURLs {
+		wg.Add(1)
+		go func(index int, url string) {
+			defer wg.Done()
+			hosts, err := fetchConfigHosts(client, url)
+			ch <- cfgResult{index: index, hosts: hosts, err: err}
+		}(i, cfgURL)
+	}
+	wg.Wait()
+	close(ch)
+
+	for result := range ch {
+		results[result.index] = result
+	}
+
+	seen := make(map[string]struct{})
+	baseURLs := make([]string, 0)
+	var lastErr error
+	for _, result := range results {
+		if result.err != nil {
+			lastErr = result.err
+			continue
+		}
+		for _, host := range result.hosts {
+			for _, baseURL := range baseURLCandidates(host) {
+				if _, ok := seen[baseURL]; ok {
+					continue
+				}
+				seen[baseURL] = struct{}{}
+				baseURLs = append(baseURLs, baseURL)
+			}
+		}
+	}
+	if len(baseURLs) == 0 {
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		return nil, fmt.Errorf("no hosts found in cfgUrls")
+	}
+	return baseURLs, nil
+}
+
+func fetchConfigHosts(client *resty.Client, cfgURL string) ([]string, error) {
+	resp, err := client.R().
+		SetHeader("User-Agent", cfgUserAgent).
+		Get(cfgURL)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode() != 200 || len(resp.Body()) == 0 {
+		return nil, fmt.Errorf("cfg url returned status %d", resp.StatusCode())
+	}
+
+	decoded, err := decodeBase64String(strings.TrimSpace(string(resp.Body())))
+	if err != nil {
+		return nil, err
+	}
+
+	var cfg cfgResponse
+	if err := json.Unmarshal(decoded, &cfg); err != nil {
+		return nil, err
+	}
+	hosts := append([]string{}, cfg.Hosts...)
+	if cfg.HostSource != "" {
+		hosts = append(hosts, cfg.HostSource)
+	}
+	if len(hosts) == 0 {
+		return nil, fmt.Errorf("cfg hosts is empty")
+	}
+	return hosts, nil
+}
+
+func refreshSubscription(client *resty.Client, config *Config, baseURLs []string, authHeaders map[string]string, contentHeaders map[string]string) (*contentResult, string, error) {
+	var lastErr error
+	for _, baseURL := range baseURLs {
+		authData, err := login(client, baseURL, config, authHeaders)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		subscribe, err := getSubscribe(client, baseURL, authData, authHeaders)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		if subscribe.Data.SubscribeUrl != "" {
+			result, err := fetchSubscriptionContent(client, subscribe.Data.SubscribeUrl, contentHeaders, config.Decrypt)
+			if err == nil {
+				return result, subscribe.Data.SubscribeUrl, nil
+			}
+			lastErr = err
+		}
+
+		if subscribe.Data.Token == "" {
+			continue
+		}
+		for _, fallbackBaseURL := range baseURLs {
+			fallbackURL := fallbackSubscribeURL(fallbackBaseURL, subscribe.Data.Token)
+			result, err := fetchSubscriptionContent(client, fallbackURL, contentHeaders, config.Decrypt)
+			if err == nil {
+				return result, fallbackURL, nil
+			}
+			lastErr = err
+		}
+	}
+
+	if lastErr != nil {
+		return nil, "", lastErr
+	}
+	return nil, "", errSubscriptionUnavailable
+}
+
+func login(client *resty.Client, baseURL string, config *Config, headers map[string]string) (string, error) {
+	resp, err := client.R().
+		SetHeaders(headers).
 		SetHeader("Content-Type", "application/json").
 		SetBody(map[string]string{
 			"email":    config.Username,
 			"password": config.Password,
 		}).
-		Post(config.BaseUrl + "/passport/auth/login")
+		Post(baseURL + "/passport/auth/login")
 	if err != nil {
-		zap.S().Errorw("login request failed", "provider", providerName, "error", err)
-		c.String(403, "Forbidden")
-		return
+		return "", err
+	}
+	if resp.StatusCode() != 200 || len(resp.Body()) == 0 {
+		return "", fmt.Errorf("login returned status %d", resp.StatusCode())
 	}
 
 	var lr loginResponse
-	if err := json.Unmarshal(loginResp.Body(), &lr); err != nil || lr.Data.AuthData == "" {
-		zap.S().Errorw("failed to parse login response", "provider", providerName, "error", err)
-		c.String(404, "Not found")
-		return
+	if err := json.Unmarshal(resp.Body(), &lr); err != nil {
+		return "", err
 	}
+	if lr.Data.AuthData == "" {
+		return "", fmt.Errorf("login auth_data is empty")
+	}
+	return lr.Data.AuthData, nil
+}
 
-	subResp, err := client.R().
-		SetHeaders(authHeaders).
-		SetHeader("Authorization", lr.Data.AuthData).
-		Get(config.BaseUrl + "/user/getSubscribe")
+func getSubscribe(client *resty.Client, baseURL string, authData string, headers map[string]string) (*subscribeResponse, error) {
+	resp, err := client.R().
+		SetHeaders(headers).
+		SetHeader("Authorization", authData).
+		Get(baseURL + "/user/getSubscribe")
 	if err != nil {
-		zap.S().Errorw("getSubscribe request failed", "provider", providerName, "error", err)
-		c.String(403, "Forbidden")
-		return
+		return nil, err
+	}
+	if resp.StatusCode() != 200 || len(resp.Body()) == 0 {
+		return nil, fmt.Errorf("getSubscribe returned status %d", resp.StatusCode())
 	}
 
 	var sr subscribeResponse
-	if err := json.Unmarshal(subResp.Body(), &sr); err != nil {
-		zap.S().Errorw("failed to parse subscribe response", "provider", providerName, "error", err)
-		c.String(404, "Not found")
-		return
+	if err := json.Unmarshal(resp.Body(), &sr); err != nil {
+		return nil, err
 	}
-
-	config.Token = sr.Data.Token
-	if !config.ForceSubscribeUrl && sr.Data.SubscribeUrl != "" {
-		config.SubscribeUrl = sr.Data.SubscribeUrl
+	if sr.Data.SubscribeUrl == "" && sr.Data.Token == "" {
+		return nil, fmt.Errorf("getSubscribe returned no subscribe_url or token")
 	}
-	if err := saveConfig(providerDir, providerName, config); err != nil {
-		zap.S().Errorw("failed to save provider config", "provider", providerName, "error", err)
-	}
-
-	contentUrl := buildContentURL(config)
-	contentResp, err := client.R().
-		SetHeaders(contentHeaders).
-		Get(contentUrl)
-	if err != nil {
-		zap.S().Errorw("get content request failed", "provider", providerName, "error", err)
-		c.String(403, "Forbidden")
-		return
-	}
-
-	body, err := decodeSubscriptionBody(contentResp.Body(), config.Decrypt)
-	if err != nil {
-		zap.S().Errorw("decode content failed", "provider", providerName, "error", err)
-		c.String(502, "Bad Gateway")
-		return
-	}
-
-	if subInfo := contentResp.Header().Get("subscription-userinfo"); subInfo != "" {
-		c.Header("subscription-userinfo", subInfo)
-	}
-	c.Data(200, "text/plain; charset=UTF-8", body)
+	return &sr, nil
 }
 
-func buildContentURL(config *Config) string {
-	if config.ForceSubscribeUrl {
-		return fmt.Sprintf("%s?token=%s", config.SubscribeUrl, config.Token)
+func fetchSubscriptionContent(client *resty.Client, url string, headers map[string]string, decrypt *DecryptConfig) (*contentResult, error) {
+	if strings.TrimSpace(url) == "" {
+		return nil, errSubscriptionUnavailable
 	}
-	if strings.Contains(config.SubscribeUrl, "token=") {
-		return config.SubscribeUrl
+
+	resp, err := client.R().
+		SetHeaders(headers).
+		Get(url)
+	if err != nil {
+		return nil, err
 	}
-	return fmt.Sprintf("%s?token=%s", config.SubscribeUrl, config.Token)
+	if resp.StatusCode() != 200 || len(resp.Body()) == 0 {
+		return nil, errSubscriptionUnavailable
+	}
+
+	body, err := decodeSubscriptionBody(resp.Body(), decrypt)
+	if err != nil {
+		return nil, err
+	}
+
+	return &contentResult{
+		body:                 body,
+		subscriptionUserinfo: resp.Header().Get("subscription-userinfo"),
+	}, nil
+}
+
+func writeSubscription(c *gin.Context, result *contentResult) {
+	if result.subscriptionUserinfo != "" {
+		c.Header("subscription-userinfo", result.subscriptionUserinfo)
+	}
+	c.Data(200, "text/plain; charset=UTF-8", result.body)
+}
+
+func fallbackSubscribeURL(baseURL string, token string) string {
+	return fmt.Sprintf("%s/client/subscribe?token=%s", normalizeBaseURL(baseURL), token)
+}
+
+func baseURLCandidates(baseURL string) []string {
+	normalized := normalizeBaseURL(baseURL)
+	if normalized == "" {
+		return nil
+	}
+	if strings.HasSuffix(normalized, "/api/v1") {
+		return []string{normalized}
+	}
+	if strings.HasSuffix(normalized, "/api") {
+		return []string{normalized, normalized + "/v1"}
+	}
+	return []string{normalized + "/api/v1"}
+}
+
+func normalizeBaseURL(baseURL string) string {
+	return strings.TrimRight(strings.TrimSpace(baseURL), "/")
+}
+
+func decodeBase64String(value string) ([]byte, error) {
+	value = strings.TrimPrefix(value, "\xef\xbb\xbf")
+	value = strings.TrimPrefix(value, "\ufeff")
+	if decoded, err := base64.StdEncoding.DecodeString(value); err == nil {
+		return decoded, nil
+	}
+	if decoded, err := base64.RawStdEncoding.DecodeString(value); err == nil {
+		return decoded, nil
+	}
+	if decoded, err := base64.URLEncoding.DecodeString(value); err == nil {
+		return decoded, nil
+	}
+	return base64.RawURLEncoding.DecodeString(value)
 }
 
 func decodeSubscriptionBody(body []byte, decrypt *DecryptConfig) ([]byte, error) {
