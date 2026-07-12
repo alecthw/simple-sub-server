@@ -5,7 +5,7 @@ import "strings"
 type SurgeInjector struct{}
 
 func (SurgeInjector) Match(file string) bool {
-	return isNamedConfFile(file, "surge")
+	return isNamedConfFile(file, "surge") || isNamedConfFile(file, "surfboard")
 }
 
 func (SurgeInjector) Inject(ctx Context, content []byte) ([]byte, error) {

@@ -83,7 +83,7 @@ flowchart TD
     AI --> AJ{"模板类型"}
     AJ -- "clash/stash" --> AK["注入 proxy-providers"]
     AJ -- "egern" --> AL["注入 external policy_group\n补充 policies\n必要时写 auto_update.url"]
-    AJ -- "surge" --> AM["注入 Proxy Group\n补充 include-other-group\n必要时写 MANAGED-CONFIG"]
+    AJ -- "surge/surfboard" --> AM["注入 Proxy Group\n补充 include-other-group\n必要时写 MANAGED-CONFIG"]
     AJ -- "loon" --> AN["注入 Remote Proxy"]
     AJ -- "quanx" --> AO["注入 server_remote"]
     AK --> X200
@@ -126,7 +126,7 @@ subconverter 服务器默认地址 `http://127.0.0.1:25500`，可以通过启动
 
 支持将 `ini` 文件放到 `subconv` 目录下集中管理，`ini` 文件中不填 url 订阅链接，然后在各个目录下创建 `subscribe.txt` 文件，文件中一行填一个 `name=url` 订阅链接。
 
-当从 `template` 目录读取以 `clash`、`stash`、`egern` 开头的 `yaml` 文件，或以 `surge`、`loon`、`quanx` 开头的 `conf` 文件时，会将 `subscribe.txt` 中的订阅附加到 `proxy-providers` 中。
+当从 `template` 目录读取以 `clash`、`stash`、`egern` 开头的 `yaml` 文件，或以 `surge`、`surfboard`、`loon`、`quanx` 开头的 `conf` 文件时，会将 `subscribe.txt` 中的订阅附加到对应配置中。
 
 当 `subconv` 目录下的 `ini` 文件内容为 `[Redirect]` 时，会返回 `302` 重定向到 `file` 指向的订阅文件；配置了 `-mcp` 时，重定向地址为 `{mcp}/{uuid}/{file}`，可用于将原 subconverter 入口平滑切换到基于模板文件的输出。
 
@@ -155,7 +155,7 @@ file=clash_simple.yaml
 
 通过启动参数 `-mcp` 设置托管配置前缀后，subconverter 的 surge/surfboard 输出会自动补充 MANAGED-CONFIG。
 
-当从 `template` 输出 `surge` 配置时，会在文件头添加 `#!MANAGED-CONFIG {mcp}/{uuid}/{file}`；输出 `egern` 配置时，会补充 `auto_update.url` 为 `{mcp}/{uuid}/{file}`。
+当从 `template` 输出 `surge` / `surfboard` 配置时，会在文件头添加 `#!MANAGED-CONFIG {mcp}/{uuid}/{file}`；输出 `egern` 配置时，会补充 `auto_update.url` 为 `{mcp}/{uuid}/{file}`。
 
 #### 订阅获取逻辑支持
 
