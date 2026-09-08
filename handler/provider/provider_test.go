@@ -65,6 +65,37 @@ func TestHandleUsesCachedSubscribeURLAndIgnoresUAQuery(t *testing.T) {
 	}
 }
 
+func TestHandleWithOnlySubscribeURLUsesDefaultUserAgent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var contentUserAgent string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		contentUserAgent = r.UserAgent()
+		w.Header().Set("subscription-userinfo", "upload=3; download=4")
+		_, _ = w.Write([]byte("direct-content"))
+	}))
+	defer server.Close()
+
+	providerDir := t.TempDir()
+	writeProviderConfig(t, providerDir, "direct", &Config{
+		SubscribeUrl: server.URL,
+	})
+
+	resp := performProviderRequest(providerDir, "/provider/direct", resty.New())
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %q", resp.Code, resp.Body.String())
+	}
+	if got := resp.Body.String(); got != "direct-content" {
+		t.Fatalf("body = %q", got)
+	}
+	if contentUserAgent != defaultUserAgent {
+		t.Fatalf("content User-Agent = %q, want %q", contentUserAgent, defaultUserAgent)
+	}
+	if got := resp.Header().Get("subscription-userinfo"); got != "upload=3; download=4" {
+		t.Fatalf("subscription-userinfo = %q", got)
+	}
+}
+
 func TestHandleRefreshesSubscribeURLFromCfgUrlsAndFallsBackWithToken(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

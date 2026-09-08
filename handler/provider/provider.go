@@ -21,7 +21,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const cfgUserAgent = "Mozilla/5.0 (dart:io) SuperAccelerator"
+const (
+	cfgUserAgent     = "Mozilla/5.0 (dart:io) SuperAccelerator"
+	defaultUserAgent = "clash-verge"
+)
 
 var errSubscriptionUnavailable = errors.New("subscription unavailable")
 
@@ -86,7 +89,9 @@ func handle(c *gin.Context, providerDir string, client *resty.Client) {
 		authHeaders["User-Agent"] = configUA
 	}
 
-	contentHeaders := make(map[string]string)
+	contentHeaders := map[string]string{
+		"User-Agent": defaultUserAgent,
+	}
 	for k, v := range config.Headers {
 		contentHeaders[k] = v
 	}
