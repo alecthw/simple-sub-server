@@ -1,7 +1,7 @@
 package template
 
 import (
-	"github.com/alecthw/sub-server/handler/subscription"
+	"github.com/alecthw/sub-server/internal/subscription"
 	"gopkg.in/yaml.v3"
 )
 
@@ -12,32 +12,23 @@ func (EgernInjector) Match(file string) bool {
 }
 
 func (EgernInjector) Inject(ctx Context, content []byte) ([]byte, error) {
-	var doc yaml.Node
-	if err := yaml.Unmarshal(content, &doc); err != nil {
-		return nil, err
-	}
+	return (pipeline[*yaml.Node]{codec: yamlCodec{}, steps: []transform[*yaml.Node]{
+		yamlStep(injectEgernProxyDNSPolicy), yamlStep(injectEgernSubscriptions),
+	}}).Inject(ctx, content)
+}
 
-	root := rootMappingNode(&doc)
-	if root == nil {
-		return content, nil
-	}
-	if err := injectEgernProxyDNSPolicy(ctx, root); err != nil {
-		return nil, err
-	}
+func injectEgernSubscriptions(ctx Context, root *yaml.Node) error {
 	if ctx.ManagedURL != "" {
 		setEgernAutoUpdateURL(root, ctx.ManagedURL)
 	}
 
 	policyGroups := getOrCreateSequenceNode(root, "policy_groups")
 	for _, entry := range ctx.Entries {
-		if entry.Name == "" || entry.URL == "" {
-			continue
-		}
 		appendPolicyName(policyGroups, entry.Name)
 		policyGroups.Content = append(policyGroups.Content, newEgernExternalPolicyGroupNode(entry))
 	}
 
-	return marshalYAML(&doc)
+	return nil
 }
 
 func appendPolicyName(policyGroups *yaml.Node, name string) {

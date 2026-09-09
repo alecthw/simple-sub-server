@@ -1,16 +1,8 @@
 package handler
 
-import (
-	providerhandler "github.com/alecthw/sub-server/handler/provider"
-	"github.com/gin-gonic/gin"
-)
-
-// ProviderHandler handles GET /provider/:provider.
-func ProviderHandler(c *gin.Context) {
-	providerhandler.Handler(providerDir, client)(c)
-}
+import "github.com/alecthw/sub-server/internal/provider"
 
 // StartProviderDNSPolicyScheduler starts the daily proxy-dns.yml refresh.
-func StartProviderDNSPolicyScheduler() {
-	providerhandler.StartProxyDNSPolicyScheduler(providerDir, client)
+func (s *Server) StartProviderDNSPolicyScheduler() {
+	provider.StartProxyDNSPolicyScheduler(s.providerDir, s.client)
 }

@@ -2,8 +2,7 @@ package subscription
 
 import (
 	"bufio"
-	"os"
-	"path/filepath"
+	"io"
 	"strings"
 )
 
@@ -13,19 +12,9 @@ type Entry struct {
 	URL  string
 }
 
-// LoadEntries reads subscribe.txt from a uuid directory.
-func LoadEntries(subDir string, uid string) ([]Entry, error) {
-	urlFilePath := filepath.Join(subDir, uid, "subscribe.txt")
-
-	fh, err := os.Open(urlFilePath)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		_ = fh.Close()
-	}()
-
-	scanner := bufio.NewScanner(fh)
+// Parse reads named or anonymous subscriptions from a text stream.
+func Parse(reader io.Reader) ([]Entry, error) {
+	scanner := bufio.NewScanner(reader)
 	scanner.Split(bufio.ScanLines)
 
 	var entries []Entry
@@ -38,7 +27,7 @@ func LoadEntries(subDir string, uid string) ([]Entry, error) {
 
 		entry := Entry{URL: trimmed}
 		name, url, hasName := strings.Cut(trimmed, "=")
-		if hasName {
+		if hasName && !strings.Contains(name, "://") {
 			entry.Name = strings.TrimSpace(name)
 			entry.URL = strings.TrimSpace(url)
 		}

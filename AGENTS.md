@@ -2,15 +2,16 @@
 
 ## Project Structure & Module Organization
 
-This is a Go service module (`github.com/alecthw/sub-server`) for serving subscription configuration files. Entry point code lives in `main.go`; shared initialization is in `handler/handler.go`.
+This is a Go service module (`github.com/alecthw/sub-server`) for serving subscription configuration files. Entry point code lives in `main.go`; per-instance server construction and route registration are in `handler/handler.go`.
 
 Core request handling is split by feature:
 
-- `handler/subscribe.go`: `/:uuid/:file` routing, security checks, fallback lookup, and response flow.
-- `handler/subconv/`: `.ini` and subconverter compatibility, including redirect handling.
-- `handler/template/`: template-based subscription injection for Clash, Stash, Egern, Surge, Loon, and QuanX.
-- `handler/provider/`: provider subscription fetching.
-- `handler/subscription/`: `subscribe.txt` parsing.
+- `handler/subscribe.go`: `/:uuid/:file` HTTP orchestration and response flow.
+- `internal/filestore/`: UUID/path validation, whitelist enforcement, root-scoped reads, and fallback lookup.
+- `internal/subconv/`: `.ini` and subconverter compatibility, including redirect handling.
+- `internal/template/`: template-based subscription injection for Clash, Stash, Egern, Surge, Loon, and QuanX.
+- `internal/provider/`: provider subscription fetching.
+- `internal/subscription/`: `subscribe.txt` parsing.
 - `log/`: Zap logger setup.
 
 The `sub/` directory is local runtime data and is ignored by Git. It may contain UUID directories, `subscribe.txt`, provider files, `sub/template`, and `sub/subconv` files for local verification.
@@ -18,14 +19,16 @@ The `sub/` directory is local runtime data and is ignored by Git. It may contain
 ## Build, Test, and Development Commands
 
 - `go build -o sub-server`: build the local binary.
-- `go run . -dir /home/alecthw/simple-sub-server -host 127.0.0.1:8080`: run the server against this workspace.
+- `go run . -dir /path/to/workdir -host 127.0.0.1:8080`: run the server against this workspace.
 - `go run . -dir /path/to/workdir -host 127.0.0.1:8080 -subcnv http://127.0.0.1:25500 -mcp https://example.com/dlcfg`: run with subconverter and managed-config prefix.
-- `go test ./...`: run all package tests.
+- `go test ./...`: run all package and HTTP end-to-end tests.
+- `go test -race ./...`: verify concurrent request handling.
+- `go vet ./...`: run static checks.
 - `gofmt -w <files>`: format touched Go files before committing.
 
 ## Coding Style & Naming Conventions
 
-Use standard Go formatting and idioms. Keep package names short and lowercase. Prefer small feature-focused packages under `handler/` instead of expanding one large file. Keep request validation and file-access checks explicit, because this service exposes local files by URL.
+Use standard Go formatting and idioms. Keep package names short and lowercase. Keep HTTP orchestration under `handler/` and feature-focused implementation packages under `internal/`. Template injectors compose typed steps through `Codec[T]` and `pipeline[T]`; use the per-server registry for app selection. Keep request validation and file-access checks explicit, because this service exposes local files by URL.
 
 ## Testing Guidelines
 

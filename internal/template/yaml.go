@@ -1,7 +1,7 @@
 package template
 
 import (
-	"github.com/alecthw/sub-server/handler/yamlutil"
+	"github.com/alecthw/sub-server/internal/yamlutil"
 	"gopkg.in/yaml.v3"
 )
 
@@ -117,4 +117,23 @@ func newIntNode(value string) *yaml.Node {
 
 func newBoolNode(value string) *yaml.Node {
 	return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: value}
+}
+
+// yamlCodec retains the document node, comments, and source ordering.
+type yamlCodec struct{}
+
+func (yamlCodec) Decode(content []byte) (*yaml.Node, bool, error) {
+	var document yaml.Node
+	if err := yaml.Unmarshal(content, &document); err != nil {
+		return nil, false, err
+	}
+	return &document, rootMappingNode(&document) != nil, nil
+}
+
+func (yamlCodec) Encode(document *yaml.Node) ([]byte, error) { return marshalYAML(document) }
+
+func yamlStep(inject func(Context, *yaml.Node) error) transform[*yaml.Node] {
+	return func(ctx Context, document *yaml.Node) (*yaml.Node, error) {
+		return document, inject(ctx, rootMappingNode(document))
+	}
 }

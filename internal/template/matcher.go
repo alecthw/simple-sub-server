@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/alecthw/sub-server/handler/subscription"
+	"github.com/alecthw/sub-server/internal/subscription"
 )
 
 // ProxyDNSPolicyLoader loads the shared Mihomo proxy DNS policy on demand.
@@ -26,36 +26,33 @@ type Injector interface {
 	Inject(ctx Context, content []byte) ([]byte, error)
 }
 
-var injectors = []Injector{
-	ClashInjector{},
-	StashInjector{},
-	EgernInjector{},
-	SurgeInjector{},
-	LoonInjector{},
-	QuanxInjector{},
+// Registry is an ordered, immutable collection of application injectors.
+// The first matching injector wins; registries can be composed per server.
+type Registry struct{ injectors []Injector }
+
+func NewRegistry(injectors ...Injector) *Registry {
+	return &Registry{injectors: append([]Injector(nil), injectors...)}
 }
 
-// IsSubscribable reports whether the template may need subscribe.txt.
-func IsSubscribable(file string) bool {
-	return findInjector(file) != nil
+func DefaultRegistry() *Registry {
+	return NewRegistry(ClashInjector{}, StashInjector{}, EgernInjector{}, SurgeInjector{}, LoonInjector{}, QuanxInjector{})
 }
 
-// Inject applies the matching template injector.
-func Inject(ctx Context, content []byte) ([]byte, error) {
-	injector := findInjector(ctx.File)
-	if injector == nil {
-		return content, nil
-	}
-	return injector.Inject(ctx, content)
-}
-
-func findInjector(file string) Injector {
-	for _, injector := range injectors {
+func (r *Registry) Find(file string) Injector {
+	for _, injector := range r.injectors {
 		if injector.Match(file) {
 			return injector
 		}
 	}
 	return nil
+}
+
+func (r *Registry) Inject(ctx Context, content []byte) ([]byte, error) {
+	injector := r.Find(ctx.File)
+	if injector == nil {
+		return content, nil
+	}
+	return injector.Inject(ctx, content)
 }
 
 func isNamedConfFile(file string, prefix string) bool {

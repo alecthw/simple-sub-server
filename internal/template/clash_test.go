@@ -28,7 +28,7 @@ proxy-server-nameserver-policy:
 `)
 
 	loadCalls := 0
-	got, err := Inject(Context{
+	got, err := DefaultRegistry().Inject(Context{
 		File: "clash_meta.yaml",
 		LoadProxyDNSPolicy: func() ([]byte, error) {
 			loadCalls++
@@ -90,7 +90,7 @@ func TestClashInjectorSplitsCombinedProxyDNSPolicyKey(t *testing.T) {
 	}, ",")
 	policyContent := []byte("proxy-server-nameserver-policy:\n  # merged provider\n  \"" + longRule + "\":\n    - 178.94.14.101#DIRECT\n")
 
-	got, err := Inject(Context{
+	got, err := DefaultRegistry().Inject(Context{
 		File: "clash_meta.yaml",
 		LoadProxyDNSPolicy: func() ([]byte, error) {
 			return policyContent, nil

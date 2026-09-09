@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/alecthw/sub-server/handler/subscription"
+	"github.com/alecthw/sub-server/internal/subscription"
 	"gopkg.in/yaml.v3"
 )
 
@@ -15,29 +15,18 @@ func (StashInjector) Match(file string) bool {
 }
 
 func (StashInjector) Inject(ctx Context, content []byte) ([]byte, error) {
-	var doc yaml.Node
-	if err := yaml.Unmarshal(content, &doc); err != nil {
-		return nil, err
-	}
+	return (pipeline[*yaml.Node]{codec: yamlCodec{}, steps: []transform[*yaml.Node]{
+		yamlStep(injectStashProxyDNSPolicy), yamlStep(injectStashSubscriptions),
+	}}).Inject(ctx, content)
+}
 
-	root := rootMappingNode(&doc)
-	if root == nil {
-		return content, nil
-	}
-
-	if err := injectStashProxyDNSPolicy(ctx, root); err != nil {
-		return nil, err
-	}
-
+func injectStashSubscriptions(ctx Context, root *yaml.Node) error {
 	providers := getOrCreateMappingNode(root, "proxy-providers")
 	for _, entry := range ctx.Entries {
-		if entry.Name == "" || entry.URL == "" {
-			continue
-		}
 		setMappingValue(providers, entry.Name, newStashProxyProviderNode(entry))
 	}
 
-	return marshalYAML(&doc)
+	return nil
 }
 
 func injectStashProxyDNSPolicy(ctx Context, root *yaml.Node) error {

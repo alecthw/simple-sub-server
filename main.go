@@ -37,8 +37,8 @@ func init() {
 
 func main() {
 	client := resty.New()
-	handler.Init(workDir, subconvUrl, managedConfigPrefix, client)
-	handler.StartProviderDNSPolicyScheduler()
+	server := handler.New(handler.Config{WorkDir: workDir, SubconverterURL: subconvUrl, ManagedConfigPrefix: managedConfigPrefix}, client)
+	server.StartProviderDNSPolicyScheduler()
 
 	r := gin.New()
 
@@ -47,8 +47,9 @@ func main() {
 
 	zap.S().Infow("main")
 
-	r.GET("/provider/:provider", handler.ProviderHandler)
-	r.GET("/:uuid/:file", handler.SubscribeHandler)
+	server.RegisterRoutes(r)
 
-	_ = r.Run(host)
+	if err := r.Run(host); err != nil {
+		zap.S().Fatalw("server stopped", "error", err)
+	}
 }

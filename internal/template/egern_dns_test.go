@@ -49,7 +49,7 @@ proxy-server-nameserver-policy:
 `)
 
 	loadCalls := 0
-	got, err := Inject(Context{
+	got, err := DefaultRegistry().Inject(Context{
 		File: "egern_app.yaml",
 		LoadProxyDNSPolicy: func() ([]byte, error) {
 			loadCalls++

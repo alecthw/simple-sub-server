@@ -15,6 +15,39 @@ export GOOS=linux GOARCH=amd64 # 可选，交叉编译
 go build -o sub-server
 ```
 
+## 开发与模块划分
+
+要求 Go 1.24 或更新版本。
+
+```text
+main.go                    启动参数、日志与 HTTP 服务启动
+handler/                   Server 实例、路由装配和 HTTP 响应
+  server_e2e_test.go        本地 HTTP 服务与模拟上游的端到端回归
+internal/
+  filestore/               文件访问、白名单、用户文件与共享模板回退
+  subscription/            subscribe.txt 流式解析与订阅条目
+  template/                App 注入器、注册表、泛型处理流程和 DNS 转换
+  subconv/                 INI 解析、重定向、subconverter 请求
+  provider/                provider 配置、上游发现、订阅获取、解密和 DNS 策略
+  yamlutil/                保留格式的 YAML 输出工具
+```
+
+`handler.New(Config, client)` 创建独立服务实例，`Server.RegisterRoutes` 统一注册路由；入口和端到端测试使用同一套装配逻辑。原包级 `Init` 和处理函数已改为实例方法，业务实现包移入 `internal/`。命令行参数、URL 路由和运行数据目录保持兼容。
+
+模板通过 `Injector` 接口匹配 App，`Registry` 按注册顺序选择首个匹配项。`Codec[T]` 和 `pipeline[T]` 统一解析、过滤有效命名订阅、顺序转换及序列化：YAML 使用 `*yaml.Node` 保留注释和顺序，文本配置使用 `string`。新增 App 时实现匹配规则、组合对应格式的转换步骤，再加入 `DefaultRegistry`；DNS 规则转换仍由各 App 按自身格式处理。
+
+```bash
+go test ./...                 # 包测试及端到端回归
+go test ./handler -run E2E    # 仅 HTTP 端到端测试
+go test -race ./...           # 并发与数据竞争检查
+go vet ./...                 # 静态检查
+go build -o sub-server
+```
+
+端到端测试使用临时工作目录、本地 HTTP 上游和示例订阅地址，覆盖七类客户端、DNS 注入、白名单、文件回退、INI 转换／重定向、provider 响应及多实例隔离，无需真实 `sub/` 数据或外部服务。
+
+文件回退仅发生在用户文件不存在时；目录、权限或其他读取错误不会触发回退。用户文件、订阅列表、白名单和共享模板使用限定目录的读取，拒绝通过文件符号链接访问目录外的数据；无法完整读取的白名单拒绝访问。subconverter 连接失败或返回非 200 状态时对外返回 `502 Bad gateway`，不再返回伪成功或透传上游错误内容。未设置 `-mcp` 时不会生成 INI 输出的托管配置头，前缀末尾的 `/` 会统一去除。
+
 ## 使用
 
 配置文件存放：`{workdir}/sub/{uuid}/{file}`。
@@ -101,15 +134,17 @@ flowchart TD
 
 ### 工作目录示例
 
+以下 UUID 为文档占位值，实际使用时请生成自己的 UUID。
+
 ```txt
 {workdir}
 ├── sub
-│   ├── 56d00b21-554d-5a90-6daa-52537050fb20
+│   ├── 00000000-0000-0000-0000-000000000001
 │   │   ├── Loon.conf
 │   │   ├── QuantumultX.conf
 │   │   ├── Stash.yaml
 │   │   └── Surge.conf
-│   └── 58cfbff0-18c8-1f7d-400a-ba07a305b1e6
+│   └── 00000000-0000-0000-0000-000000000002
 │       ├── clash.ini
 │       ├── ClashMeta.yaml
 │       └── ClashMetaOnlyCN.yaml
@@ -140,9 +175,9 @@ file=clash_simple.yaml
 ```txt
 {workdir}
 ├── sub
-│   ├── 56d00b21-554d-5a90-6daa-52537050fb20
+│   ├── 00000000-0000-0000-0000-000000000001
 │   │   └── subscribe.txt
-│   ├── 58cfbff0-18c8-1f7d-400a-ba07a305b1e6
+│   ├── 00000000-0000-0000-0000-000000000002
 │   │   └── subscribe.txt
 │   └── subconv
 │       ├── clash.ini

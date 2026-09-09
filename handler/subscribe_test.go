@@ -6,27 +6,16 @@ import (
 	"reflect"
 	"testing"
 
+	templateinject "github.com/alecthw/sub-server/internal/template"
 	"github.com/go-resty/resty/v2"
 	"gopkg.in/yaml.v3"
 )
 
-func TestAppendTemplateContentInjectsClashProxyDNSPolicy(t *testing.T) {
-	previousSubDir := subDir
-	previousProviderDir := providerDir
-	previousClient := client
-	previousManagedConfigPrefix := managedConfigPrefix
-	t.Cleanup(func() {
-		subDir = previousSubDir
-		providerDir = previousProviderDir
-		client = previousClient
-		managedConfigPrefix = previousManagedConfigPrefix
-	})
-
+func TestServerLoadsClashProxyDNSPolicy(t *testing.T) {
 	workDir := t.TempDir()
-	subDir = filepath.Join(workDir, "sub")
-	providerDir = filepath.Join(subDir, "provider")
-	client = resty.New()
-	managedConfigPrefix = ""
+	server := New(Config{WorkDir: workDir}, resty.New())
+	subDir := filepath.Join(workDir, "sub")
+	providerDir := filepath.Join(subDir, "provider")
 
 	uid := "00000000-0000-0000-0000-000000000001"
 	userDir := filepath.Join(subDir, uid)
@@ -48,12 +37,13 @@ proxy-server-nameserver-policy:
 		t.Fatal(err)
 	}
 
-	got, err := appendTemplateContent(
-		uid,
-		"clash_meta.yaml",
-		filepath.Join(templateDir, "clash_meta.yaml"),
-		[]byte("dns:\n  enable: true\n"),
-	)
+	entries, err := server.store.LoadEntries(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := server.templates.Inject(templateinject.Context{
+		UID: uid, File: "clash_meta.yaml", Entries: entries, LoadProxyDNSPolicy: server.loadProxyDNSPolicy,
+	}, []byte("dns:\n  enable: true\n"))
 	if err != nil {
 		t.Fatal(err)
 	}

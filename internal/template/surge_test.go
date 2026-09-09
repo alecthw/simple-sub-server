@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alecthw/sub-server/handler/subscription"
+	"github.com/alecthw/sub-server/internal/subscription"
 )
 
 func TestSurgeInjectorSupportsSurfboardTemplates(t *testing.T) {
@@ -24,11 +24,11 @@ FINAL,Proxy
 		},
 	}
 
-	if !IsSubscribable(ctx.File) {
+	if DefaultRegistry().Find(ctx.File) == nil {
 		t.Fatalf("expected %s to be subscribable", ctx.File)
 	}
 
-	gotBytes, err := Inject(ctx, content)
+	gotBytes, err := DefaultRegistry().Inject(ctx, content)
 	if err != nil {
 		t.Fatal(err)
 	}

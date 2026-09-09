@@ -1,6 +1,10 @@
 package template
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/alecthw/sub-server/internal/subscription"
+)
 
 type SurgeInjector struct{}
 
@@ -9,29 +13,16 @@ func (SurgeInjector) Match(file string) bool {
 }
 
 func (SurgeInjector) Inject(ctx Context, content []byte) ([]byte, error) {
-	result := string(content)
-	section, sectionStart, sectionEnd, ok := findSection(result, "[Proxy Group]")
-	if ok {
-		for _, entry := range ctx.Entries {
-			if entry.Name == "" || entry.URL == "" {
-				continue
-			}
-			section = appendSurgePolicyName(section, entry.Name)
-			section = appendSurgeExternalGroup(section, entry.Name, entry.URL)
-		}
-		result = result[:sectionStart] + section + result[sectionEnd:]
-	}
+	return (pipeline[string]{codec: textCodec{}, steps: []transform[string]{
+		injectSurgeSubscriptions, injectHostProxyDNSPolicy, injectSurgeManagedConfig,
+	}}).Inject(ctx, content)
+}
 
-	var err error
-	result, err = injectHostProxyDNSPolicy(ctx, result)
-	if err != nil {
-		return nil, err
-	}
-	if ctx.ManagedURL != "" {
-		result = prependSurgeManagedConfig(ctx.ManagedURL, result)
-	}
-
-	return []byte(result), nil
+func injectSurgeSubscriptions(ctx Context, content string) (string, error) {
+	return injectSection(ctx, content, "[Proxy Group]", func(section string, entry subscription.Entry) string {
+		section = appendSurgePolicyName(section, entry.Name)
+		return appendSurgeExternalGroup(section, entry.Name, entry.URL)
+	}), nil
 }
 
 func prependSurgeManagedConfig(managedURL string, content string) string {
@@ -95,4 +86,11 @@ func splitCommaList(value string) []string {
 func appendSurgeExternalGroup(section string, name string, url string) string {
 	line := name + " = select, hidden=0, policy-path=" + url + ", update-interval=86400, icon-url=https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Airport.png"
 	return appendLine(section, line)
+}
+
+func injectSurgeManagedConfig(ctx Context, content string) (string, error) {
+	if ctx.ManagedURL != "" {
+		content = prependSurgeManagedConfig(ctx.ManagedURL, content)
+	}
+	return content, nil
 }
