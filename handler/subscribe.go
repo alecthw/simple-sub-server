@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	providerhandler "github.com/alecthw/sub-server/handler/provider"
 	"github.com/alecthw/sub-server/handler/subconv"
 	"github.com/alecthw/sub-server/handler/subscription"
 	templateinject "github.com/alecthw/sub-server/handler/template"
@@ -154,6 +155,9 @@ func appendTemplateContent(uid string, file string, filePath string, fileContent
 		File:       file,
 		ManagedURL: getManagedConfigURL(uid, file),
 		Entries:    entries,
+		LoadProxyDNSPolicy: func() ([]byte, error) {
+			return providerhandler.LoadOrGenerateProxyDNSPolicy(providerDir, client)
+		},
 	}, fileContent)
 }
 

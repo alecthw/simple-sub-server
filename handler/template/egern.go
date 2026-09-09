@@ -21,6 +21,9 @@ func (EgernInjector) Inject(ctx Context, content []byte) ([]byte, error) {
 	if root == nil {
 		return content, nil
 	}
+	if err := injectEgernProxyDNSPolicy(ctx, root); err != nil {
+		return nil, err
+	}
 	if ctx.ManagedURL != "" {
 		setEgernAutoUpdateURL(root, ctx.ManagedURL)
 	}

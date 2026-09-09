@@ -9,16 +9,19 @@ func (QuanxInjector) Match(file string) bool {
 func (QuanxInjector) Inject(ctx Context, content []byte) ([]byte, error) {
 	result := string(content)
 	section, sectionStart, sectionEnd, ok := findSection(result, "[server_remote]")
-	if !ok {
-		return content, nil
-	}
-
-	for _, entry := range ctx.Entries {
-		if entry.Name == "" || entry.URL == "" {
-			continue
+	if ok {
+		for _, entry := range ctx.Entries {
+			if entry.Name == "" || entry.URL == "" {
+				continue
+			}
+			section = appendLine(section, entry.URL+", tag="+entry.Name+", update-interval=86400, opt-parser=true")
 		}
-		section = appendLine(section, entry.URL+", tag="+entry.Name+", update-interval=86400, opt-parser=true")
+		result = result[:sectionStart] + section + result[sectionEnd:]
 	}
 
-	return []byte(result[:sectionStart] + section + result[sectionEnd:]), nil
+	result, err := injectQuanxProxyDNSPolicy(ctx, result)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(result), nil
 }

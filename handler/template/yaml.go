@@ -1,23 +1,12 @@
 package template
 
 import (
-	"bytes"
-
+	"github.com/alecthw/sub-server/handler/yamlutil"
 	"gopkg.in/yaml.v3"
 )
 
 func marshalYAML(node *yaml.Node) ([]byte, error) {
-	var buf bytes.Buffer
-	encoder := yaml.NewEncoder(&buf)
-	encoder.SetIndent(2)
-	if err := encoder.Encode(node); err != nil {
-		_ = encoder.Close()
-		return nil, err
-	}
-	if err := encoder.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+	return yamlutil.Marshal(node)
 }
 
 func rootMappingNode(doc *yaml.Node) *yaml.Node {
@@ -94,6 +83,16 @@ func setMappingValue(root *yaml.Node, key string, value *yaml.Node) {
 	}
 
 	root.Content = append(root.Content, newStringNode(key), value)
+}
+
+func deleteMappingValue(root *yaml.Node, key string) {
+	for index := 0; index+1 < len(root.Content); index += 2 {
+		if root.Content[index].Value != key {
+			continue
+		}
+		root.Content = append(root.Content[:index], root.Content[index+2:]...)
+		return
+	}
 }
 
 func newSequenceNode(items ...*yaml.Node) *yaml.Node {

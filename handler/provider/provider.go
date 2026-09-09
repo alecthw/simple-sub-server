@@ -65,6 +65,7 @@ type cfgResponse struct {
 type contentResult struct {
 	body                 []byte
 	subscriptionUserinfo string
+	profileTitle         string
 }
 
 // Handler handles GET /provider/:provider.
@@ -77,11 +78,29 @@ func Handler(providerDir string, client *resty.Client) gin.HandlerFunc {
 func handle(c *gin.Context, providerDir string, client *resty.Client) {
 	providerName := c.Param("provider")
 
+	if providerName == proxyDNSProviderName {
+		handleProxyDNS(c, providerDir, client)
+		return
+	}
+
+	result, status, err := fetchProviderResult(providerDir, providerName, client)
+	if err != nil {
+		zap.S().Errorw("failed to fetch provider subscription", "provider", providerName, "error", err)
+		if status == 404 {
+			c.String(404, "Not found")
+			return
+		}
+		c.String(403, "Forbidden")
+		return
+	}
+
+	writeSubscription(c, result)
+}
+
+func fetchProviderResult(providerDir string, providerName string, client *resty.Client) (*contentResult, int, error) {
 	config, err := loadConfig(providerDir, providerName)
 	if err != nil {
-		zap.S().Errorw("failed to load provider config", "provider", providerName, "error", err)
-		c.String(404, "Not found")
-		return
+		return nil, 404, err
 	}
 
 	authHeaders := make(map[string]string)
@@ -99,24 +118,19 @@ func handle(c *gin.Context, providerDir string, client *resty.Client) {
 	if config.SubscribeUrl != "" {
 		result, err := fetchSubscriptionContent(client, config.SubscribeUrl, contentHeaders, config.Decrypt)
 		if err == nil {
-			writeSubscription(c, result)
-			return
+			return result, 200, nil
 		}
 		zap.S().Infow("cached subscribe url unavailable, refreshing", "provider", providerName, "error", err)
 	}
 
 	baseURLs, err := fetchBaseURLs(client, config.CfgUrls)
 	if err != nil {
-		zap.S().Errorw("failed to fetch provider base urls", "provider", providerName, "error", err)
-		c.String(404, "Not found")
-		return
+		return nil, 404, err
 	}
 
 	result, subscribeURL, err := refreshSubscription(client, config, baseURLs, authHeaders, contentHeaders)
 	if err != nil {
-		zap.S().Errorw("failed to refresh subscription", "provider", providerName, "error", err)
-		c.String(403, "Forbidden")
-		return
+		return nil, 403, err
 	}
 
 	config.SubscribeUrl = subscribeURL
@@ -124,7 +138,7 @@ func handle(c *gin.Context, providerDir string, client *resty.Client) {
 		zap.S().Errorw("failed to save provider config", "provider", providerName, "error", err)
 	}
 
-	writeSubscription(c, result)
+	return result, 200, nil
 }
 
 func fetchBaseURLs(client *resty.Client, cfgURLs []string) ([]string, error) {
@@ -326,6 +340,7 @@ func fetchSubscriptionContent(client *resty.Client, url string, headers map[stri
 	return &contentResult{
 		body:                 body,
 		subscriptionUserinfo: resp.Header().Get("subscription-userinfo"),
+		profileTitle:         resp.Header().Get("profile-title"),
 	}, nil
 }
 

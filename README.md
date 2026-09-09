@@ -81,11 +81,11 @@ flowchart TD
     AG -- "否" --> X404
     AG -- "是" --> AI["读取 subscribe.txt\n解析 name=url"]
     AI --> AJ{"模板类型"}
-    AJ -- "clash/stash" --> AK["注入 proxy-providers"]
-    AJ -- "egern" --> AL["注入 external policy_group\n补充 policies\n必要时写 auto_update.url"]
-    AJ -- "surge/surfboard" --> AM["注入 Proxy Group\n补充 include-other-group\n必要时写 MANAGED-CONFIG"]
-    AJ -- "loon" --> AN["注入 Remote Proxy"]
-    AJ -- "quanx" --> AO["注入 server_remote"]
+    AJ -- "clash/stash" --> AK["注入 proxy-providers\n注入对应 DNS 策略"]
+    AJ -- "egern" --> AL["注入 external policy_group\n补充 policies\n注入 DNS upstreams/forward\n必要时写 auto_update.url"]
+    AJ -- "surge/surfboard" --> AM["注入 Proxy Group\n补充 include-other-group\n注入 Host DNS 策略\n必要时写 MANAGED-CONFIG"]
+    AJ -- "loon" --> AN["注入 Remote Proxy\n注入 Host DNS 策略"]
+    AJ -- "quanx" --> AO["注入 server_remote\n注入 dns 策略"]
     AK --> X200
     AL --> X200
     AM --> X200
@@ -161,11 +161,37 @@ file=clash_simple.yaml
 
 此处不详述，有需要看源码。
 
+provider 配置仅包含 `subscribeUrl` 时，服务会使用默认 `User-Agent: clash-verge` 请求并直接返回订阅内容；可通过配置中的 `headers.User-Agent` 覆盖默认值。
+
+`GET /provider/proxy-dns` 会遍历 `sub/provider` 下除 `proxy-dns.yml` 外的所有 provider，实时生成并返回 Mihomo 格式的 `proxy-server-nameserver-policy`，同时原子更新 `sub/provider/proxy-dns.yml`。服务也会按照服务器本地时区每天凌晨 3 点自动刷新该文件。
+
+生成规则如下：
+
+- 仅处理 `proxy-server-nameserver` 中含有私有 DNS 的订阅；命中后保留该列表中的全部 DNS，包括公共备用 DNS。
+- 默认从订阅的 `proxies[].server` 提取域名最后两段并生成 `+.` 模糊匹配规则，IP 节点不参与域名规则。
+- `proxy-dns.yml` 顶层的 `common-domains` 是可手工维护的常用域名列表，默认包含 `github.com`。节点域名命中列表项或其子域时保留完整原始域名，不生成 `+.` 模糊规则。
+- DoH 追加 `#DIRECT&skip-cert-verify=true`，其他 DNS 追加 `#DIRECT`。
+- 合并规则时会使用对应节点完整域名探测 DNS 可用性；同一个 DNS 只探测一次，所有 DNS 均保留，最终规则中可用 DNS 排在不可用 DNS 前面。
+- 域名规则相同或 DNS 服务器存在任一交集时合并，域名、DNS 和 provider 注释均去重。
+
+通过 `sub/template` 返回 Clash 模板时，服务仅注入 `dns.proxy-server-nameserver-policy`，模板已有的 `dns.nameserver-policy` 保持不变。
+
+返回 Stash 模板时仅注入 `dns.nameserver-policy`，并移除不支持的 `dns.proxy-server-nameserver-policy`。策略中的 DNS 会去除 `#DIRECT`、`#DIRECT&skip-cert-verify=true` 等 Mihomo 参数，并去重追加到 `dns.proxy-server-nameserver`。Clash 和 Stash 注入时都会将 `proxy-dns.yml` 中合并存储的组合域名键拆成单个域名规则，避免客户端对长 YAML 键的兼容问题。文件不存在或为空时会先生成。
+
+通过 Surge、Surfboard 或 Loon 模板返回配置时，服务会复用同一套转换逻辑将策略插入 `[Host]`：组合域名逐条展开，`+.` 转为 `*.`，精确域名保持不变，DNS 地址移除 `#DIRECT` 等 Mihomo 参数，provider 注释继续保留。
+
+通过 Quantumult X 模板返回配置时，服务会将策略转换后插入 `[dns]`：普通 DNS、DoH、DoQ 分别写为 `server`、`doh-server`、`doq-server`，每组规则使用可用性排序后的第一个 DNS。组合域名逐条展开，provider 注释继续保留。
+
+通过 Egern 模板返回配置时，每个合并策略组会生成一个 `dns.upstreams`，并在 `dns.forward` 中生成引用该 upstream 的 `domain_suffix` 或 `domain` 规则。新增 forward 规则前插到模板已有规则之前；单供应商优先用供应商名称作为 upstream 名，多供应商使用 `proxy-dns-N`，重名时自动避让。
+
+`proxy-dns.yml` 无需预先创建；手动请求聚合端点或到达定时刷新时间时会自动生成。后续可直接编辑其中的 `common-domains` 列表补充常用域名，刷新策略时该列表会被保留；模板注入只读取 `proxy-server-nameserver-policy`，不会注入 `common-domains` 元数据。
+
 ```txt
 {workdir}
 ├── sub
 │   └── provider
-│       └── airport.yml
+│       ├── airport.yml
+│       └── proxy-dns.yml
 └── sub-server
 ```
 

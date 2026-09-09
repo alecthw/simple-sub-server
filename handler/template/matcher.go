@@ -8,12 +8,16 @@ import (
 	"github.com/alecthw/sub-server/handler/subscription"
 )
 
+// ProxyDNSPolicyLoader loads the shared Mihomo proxy DNS policy on demand.
+type ProxyDNSPolicyLoader func() ([]byte, error)
+
 // Context carries runtime data used by template injectors.
 type Context struct {
-	UID        string
-	File       string
-	ManagedURL string
-	Entries    []subscription.Entry
+	UID                string
+	File               string
+	ManagedURL         string
+	Entries            []subscription.Entry
+	LoadProxyDNSPolicy ProxyDNSPolicyLoader
 }
 
 // Injector injects subscription information into a template format.

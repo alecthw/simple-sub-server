@@ -38,6 +38,7 @@ func init() {
 func main() {
 	client := resty.New()
 	handler.Init(workDir, subconvUrl, managedConfigPrefix, client)
+	handler.StartProviderDNSPolicyScheduler()
 
 	r := gin.New()
 

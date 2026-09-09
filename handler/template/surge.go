@@ -11,19 +11,22 @@ func (SurgeInjector) Match(file string) bool {
 func (SurgeInjector) Inject(ctx Context, content []byte) ([]byte, error) {
 	result := string(content)
 	section, sectionStart, sectionEnd, ok := findSection(result, "[Proxy Group]")
-	if !ok {
-		return content, nil
-	}
-
-	for _, entry := range ctx.Entries {
-		if entry.Name == "" || entry.URL == "" {
-			continue
+	if ok {
+		for _, entry := range ctx.Entries {
+			if entry.Name == "" || entry.URL == "" {
+				continue
+			}
+			section = appendSurgePolicyName(section, entry.Name)
+			section = appendSurgeExternalGroup(section, entry.Name, entry.URL)
 		}
-		section = appendSurgePolicyName(section, entry.Name)
-		section = appendSurgeExternalGroup(section, entry.Name, entry.URL)
+		result = result[:sectionStart] + section + result[sectionEnd:]
 	}
 
-	result = result[:sectionStart] + section + result[sectionEnd:]
+	var err error
+	result, err = injectHostProxyDNSPolicy(ctx, result)
+	if err != nil {
+		return nil, err
+	}
 	if ctx.ManagedURL != "" {
 		result = prependSurgeManagedConfig(ctx.ManagedURL, result)
 	}
